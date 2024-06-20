@@ -10,8 +10,6 @@ import torchaudio
 from torchaudio import transforms
 from torch.utils.data import DataLoader, Dataset, random_split
 import torchaudio
-from torch.utils.data import random_split
-import torch.nn.functional as F
 from torch.nn import init
 from torch import nn
 
@@ -24,7 +22,7 @@ class AudioUtil():
         return (sig, sr)
 
     @staticmethod
-    def pad_trunc(aud, max_ms=10000):
+    def pad_trunc(aud, max_ms):
         sig, sr = aud
         num_rows, sig_len = sig.shape
         max_len = sr // 1000 * max_ms
@@ -87,21 +85,11 @@ class SoundDS(Dataset):
         self.sr = 22050
         self.shift_pct = 0.2
 
-    # ----------------------------
-    # Number of items in dataset
-    # ----------------------------
     def __len__(self):
         return len(self.df)
 
-        # ----------------------------
-
-    # Get i'th item in dataset
-    # ----------------------------
     def __getitem__(self, idx):
-        # Absolute file path of the audio file - concatenate the audio directory with
-        # the relative path
         audio_file = self.df.loc[idx, 'Name']
-        # Get the Class ID
         class_id = self.df.loc[idx, 'Sex']
 
         aud = AudioUtil.open(audio_file)
@@ -138,7 +126,7 @@ class AudioClassifier(nn.Module):
         super().__init__()
         conv_layers = []
 
-        # First Convolution Block with Relu and Batch Norm. Use Kaiming Initialization
+        # First Convolution Block with Relu and Batch Norm
         self.conv1 = nn.Conv2d(1, 16, kernel_size=(5, 5), stride=(2, 2), padding=(2, 2))
         self.relu1 = nn.ReLU()
         self.bn1 = nn.BatchNorm2d(16)
@@ -177,6 +165,7 @@ class AudioClassifier(nn.Module):
         # Wrap the Convolutional Blocks
         self.conv = nn.Sequential(*conv_layers)
 
+
     # ----------------------------
     # Forward pass computations
     # ----------------------------
@@ -210,34 +199,24 @@ def training(model, train_dl, num_epochs):
         # Repeat for each batch in the training set
         for i, data in enumerate(train_dl):
 
-            # Get the input features and target labels, and put them on the GPU
             inputs, labels = data[0].to(device), data[1].to(device)
 
-            # Normalize the inputs
             inputs_m, inputs_s = inputs.mean(), inputs.std()
             inputs = (inputs - inputs_m) / inputs_s
 
-            # Zero the parameter gradients
             optimizer.zero_grad()
 
-            # forward + backward + optimize
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
             #scheduler.step()
 
-            # Keep stats for Loss and Accuracy
             running_loss += loss.item()
-
-            # Get the predicted class with the highest score
             _, prediction = torch.max(outputs, 1)
-            # Count of predictions that matched the target label
             correct_prediction += (prediction == labels).sum().item()
             total_prediction += prediction.shape[0]
 
-            if i % 500 == 0:    # print every 10 mini-batches
-                print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 500))
 
         # Print stats at the end of the epoch
         num_batches = len(train_dl)
@@ -246,6 +225,8 @@ def training(model, train_dl, num_epochs):
         print(f'Epoch: {epoch}, Loss: {avg_loss:.2f}, Accuracy: {acc:.2f}')
 
     print('Finished Training')
+
+
 
 def inference(model, val_dl):
     correct_prediction = 0
@@ -287,8 +268,15 @@ myds = SoundDS(data_train)
 
 
 # Create training and validation data loaders
-train_dl = torch.utils.data.DataLoader(myds, batch_size=30, shuffle=True)
+#train_dl = torch.utils.data.DataLoader(myds, batch_size=30, shuffle=True)
+num_items = len(myds)
+num_train = round(num_items * 0.8)
+num_val = num_items - num_train
+train_ds, val_ds = random_split(myds, [num_train, num_val])
 
+# Create training and validation data loaders
+train_dl = torch.utils.data.DataLoader(train_ds, batch_size=30, shuffle=True)
+val_dl = torch.utils.data.DataLoader(val_ds, batch_size=30, shuffle=False)
 
 #train_dl = torch.utils.data.DataLoader(myds, batch_size=30, shuffle=True)
 
@@ -298,9 +286,10 @@ myModel = AudioClassifier()
 myModel = myModel.to(device)
 for j in range(10):
 
-    num_epochs = 10
+    num_epochs = 5
     training(myModel, train_dl, num_epochs)
-    with open("data.tsv", "w") as file:
+    inference(myModel,val_dl)
+    with open("predictions.tsv", "w") as file:
         with torch.no_grad():
             for data in test_dl:
                 inputs, labels = data[0], data[1]
